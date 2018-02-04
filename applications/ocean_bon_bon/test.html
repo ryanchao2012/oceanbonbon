@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Marker animations with <code>setTimeout()</code></title>
+    <title>jQuery UI Datepicker - Format date</title>
+    <link rel="stylesheet" href="//code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
+    <script src="https://code.jquery.com/jquery-1.12.4.js"></script>
+    <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script>
+    <script>
+        $(function() {
+            $("#start_at").datepicker({
+                dateFormat: "yy-mm-dd"
+            });
+            $("#end_at").datepicker({
+                dateFormat: "yy-mm-dd"
+            });
+        });
+    </script>
+    <style>
+
+      /* Always set the map height explicitly to define the size of the div
+       * element that contains the map. */
+      #map {
+        height: 100%;
+      }
+      /* Optional: Makes the sample page fill the window. */
+      html, body {
+        height: 100%;
+        margin: 0;
+        padding: 0;
+      }
+      #floating-panel {
+        font-size: 12px;
+        position: absolute;
+        top: 10%;
+        left: 10px;
+        z-index: 5;
+        background-color: #fff;
+        padding-top: 5px;
+        padding-left: 3px;
+        border: 1px solid #999;
+        text-align: center;
+        font-family: 'Roboto','sans-serif';
+        line-height: 30px;
+        border: none;
+      }
+      #time-panel {
+        font-size: 12px;
+        position: absolute;
+        top: 80%;
+        left: 10px;
+        z-index: 5;
+        background-color: #fff;
+        padding: 5px;
+        border: 1px solid #999;
+        text-align: center;
+        font-family: 'Roboto','sans-serif';
+        line-height: 30px;
+        border: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="floating-panel">
+        <label for="start_at">初始時間：</label><input type="text" id="start_at" value="2015-02-04"> <br>
+        <label for="end_at">結束時間：</label><input type="text" id="end_at" value="2015-02-10"> <br>
+        <label for="interval">時間區間：</label><input type="text" id="interval" value=1> <br>
+        <button id="drop" onclick="playVoyage()">play</button><br>
+        <input id="port" onclick="layerControl('port');" type="checkbox" checked>顯示港口 <img src="port.png" style="width: 15px;height: 15px;">
+        <br>
+        <input id="vessel" onclick="layerControl('vessel');" type="checkbox">顯示漁船
+        <div>
+          標記：<br>
+          fishing : <span style="border-radius: 10px;background-color: #393;width: 8px;height: 8px;display: inline-block;"> </span><br>
+          trawling : <span style="border-radius: 10px;background-color: #800;width: 8px;height: 8px;display: inline-block;"> </span><br>
+          inbound : <span style="border-radius: 10px;background-color: #ae00ae;width: 8px;height: 8px;display: inline-block;"> </span><br>
+          outbound : <span style="border-radius: 10px;background-color: #c4c400;width: 8px;height: 8px;display: inline-block;"> </span><br>
+        </div>
+    </div>
+    <div id="time-panel">
+        <label>軌跡時間：</label><span id='time'></span>
+    </div>
+    <div id="map"></div>
+    <script type="text/javascript">
+
+      $(document).ready(function() {
+          $.ajax({
+              type: "GET",
+              url: "port.csv",
+              dataType: "text",
+              success: function(data) {
+                  portData(data);
+              }
+           });
+          $.ajax({
+              type: "GET",
+              url: "fishery.csv",
+              dataType: "text",
+              success: function(data) {
+                  fisheryData(data);
+              }
+           });
+      });
+
+        function playVoyage() {
+            $.ajax({
+                type: "GET",
+                url: "/fish/getVesselsData.php",
+                data: {
+                    start_at: $("#start_at").val(),
+                    end_at: $("#end_at").val(),
+                    interval: $("#interval").val()
+                },
+                dataType: "json",
+                success: function(data) {
+                    processData(data);
+                }
+            });
+        }
+
+        var vessels = [];
+        var move_time = [];
+        var locations = [];
+        var fisheries = [];
+
+        function portData(data) {
+            var allRows = data.split(/\r?\n|\r/);
+            allRows.shift();
+            for (var i=0; i<allRows.length; i++) {
+                locations.push(allRows[i]);
+            }
+            setPortMarker();
+        }
+
+        function fisheryData(data) {
+            var allRows = data.split(/\r?\n|\r/);
+            allRows.shift();
+            allRows.pop();
+            for (var i=0; i<allRows.length; i++) {
+                fisheries.push(allRows[i]);
+            }
+            setFisheryMarker();
+        }
+
+        function processData(data) {
+            for (var day in data) {
+                vessels[day] = [];
+                for (var uuid in data[day]) {
+                    vessels[day][uuid] = [];
+                    vessels[day][uuid]['position'] = {lat: parseFloat(data[day][uuid]['lat']), lng: parseFloat(data[day][uuid]['lon'])};
+                    vessels[day][uuid]['tag'] = data[day][uuid]['tag'];
+                    move_time[day] = day;
+                }
+            }
+            drop();
+        }
+    </script>
+
+    <script>
+      var markers = [];
+      var port_markers = [];
+      var fishery_markers = [];
+      var map;
+
+      function initMap() {
+        map = new google.maps.Map(document.getElementById('map'), {
+          zoom: 4,
+          center: {lat: 24.6885218, lng: 146.3582962}
+        });
+      }
+
+      function setPortMarker() {
+          var infowindow = new google.maps.InfoWindow;
+          var port_marker;
+          var icon = {
+              url: 'port.png',
+              scaledSize: new google.maps.Size(25, 25),
+              origin: new google.maps.Point(0,0),
+              anchor: new google.maps.Point(0, 0)
+          }
+
+          for (var i = 0; i < locations.length; i++) {
+            var port = locations[i].split(",");
+            port_marker = new google.maps.Marker({
+                position: new google.maps.LatLng(port[4], port[3]),
+                map: map,
+                icon: icon
+            });
+            content = 'Port Name : ' + port[2];
+            google.maps.event.addListener(port_marker, 'click', (function(port_marker, infowindow, content) {
+                return function() {
+                    infowindow.setContent(content);
+                    infowindow.open(map, port_marker);
+                }
+            })(port_marker, infowindow, content));
+            port_markers.push(port_marker);
+          }
+      }
+
+      function setFisheryMarker() {
+          var fishery_marker;
+
+          for (var i = 0; i < fisheries.length; i++) {
+            var fishery = fisheries[i].split(",");
+            var size = 20 * parseInt(fishery[5]);
+            var icon = {
+                url: 'circle.png',
+                scaledSize: new google.maps.Size(size, size),
+                origin: new google.maps.Point(0,0),
+                anchor: new google.maps.Point(0,0)
+            }
+            fishery_marker = new google.maps.Marker({
+                position: new google.maps.LatLng(fishery[4], fishery[3]),
+                map: map,
+                icon: icon
+            });
+            fishery_marker.setOpacity(0.3);
+            fishery_markers.push(fishery_marker);
+          }
+      }
+
+      function drop() {
+        var i = 0;
+        for (var day in vessels) {
+            markers[day] = [];
+            addMarkerWithTimeout(vessels[day], i * 300, day);
+            i++;
+        }
+      }
+
+      var last_day = 0;
+      function addMarkerWithTimeout(positions, timeout, day, is_fadeout = 1) {
+        window.setTimeout(function() {
+            var icons = [];
+            icons['fishing'] = {
+              path: google.maps.SymbolPath.CIRCLE,
+              scale: 2,
+              strokeColor: '#393',
+              fillOpacity: 0.8,
+              strokeWeight: 5
+            };
+
+            icons['trawling'] = {
+              path: google.maps.SymbolPath.CIRCLE,
+              scale: 2,
+              strokeColor: '#800',
+              fillOpacity: 0.8,
+              strokeWeight: 5
+            };
+
+            icons['inbound'] = {
+              path: google.maps.SymbolPath.CIRCLE,
+              scale: 2,
+              strokeColor: '#ae00ae',
+              fillOpacity: 0.8,
+              strokeWeight: 5
+            };
+
+            icons['outbound'] = {
+              path: google.maps.SymbolPath.CIRCLE,
+              scale: 2,
+              strokeColor: '#c4c400',
+              fillOpacity: 0.8,
+              strokeWeight: 5
+            };
+
+            for (var uuid in positions) {
+              console.log(positions[uuid]['tag']);
+                var use_icon = icons[positions[uuid]['tag']];
+
+                markers[day][uuid] = new google.maps.Marker({
+                    position: positions[uuid]['position'],
+                    map: map,
+                    icon: use_icon
+                });
+                //markers[day][uuid].setOpacity(0);
+                //fadeInMarkers(day, uuid, 0.05);
+            }
+
+            if (is_fadeout) {
+                if (last_day != 0) {
+                    for (var key in markers[last_day]) {
+                        // markers[last_day][key].setMap(null);
+                        fadeoutMarkers(last_day, key, 1);
+                    }
+                }
+            }
+            last_day = day;
+            }, timeout);
+        }
+
+        var markerOpacityIncrement = 0.5;
+
+        function fadeInMarkers(last_day, key, markerOpacity) {
+            if (markerOpacity >= 1) {
+                return;
+            }
+
+            markers[last_day][key].setOpacity(markerOpacity);
+
+            // increment opacity
+            markerOpacity += markerOpacityIncrement;
+
+            // call this method again
+            setTimeout(function() {
+                fadeInMarkers(last_day, key, markerOpacity);
+            }, 10);
+        }
+
+        function fadeoutMarkers(last_day, key, markerOpacity) {
+            if (markerOpacity <= 0) {
+                markers[last_day][key].setMap(null);
+                return;
+            }
+
+            markers[last_day][key].setOpacity(markerOpacity);
+
+            // increment opacity
+            markerOpacity -= markerOpacityIncrement;
+
+            // call this method again
+            setTimeout(function() {
+                fadeoutMarkers(last_day, key, markerOpacity);
+            }, 100);
+        }
+
+      function layerControl(id) {
+          switch (id) {
+              case 'port':
+                  if (!$("#" + id).prop("checked")) {
+                      clearMarkers(port_markers);
+                  } else {
+                      showMarkers(port_markers);
+                  }
+                  break;
+              case 'vessel':
+                  for (var day in vessels) {
+                      markers[day] = [];
+                      addMarkerWithTimeout(vessels[day], 0, day, 0);
+                  }
+                  break;
+          }
+          //alert($("#" + id).prop("checked"));
+      }
+
+      function setMarkerOnMap(map, marker_array) {
+          for (var i=0; i<marker_array.length; i++) {
+              marker_array[i].setMap(map);
+          }
+      }
+
+      function showMarkers(marker_array) {
+          setMarkerOnMap(map, marker_array);
+      }
+
+      function showVesselMarkers(marker_array) {
+          return ;
+      }
+
+      function clearMarkers(marker_array, vessel = 0) {
+          setMarkerOnMap(null, marker_array);
+      }
+
+    </script>
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAtTCBp1eFIl0SZf5KMPSk9KaZdly5hC4E&callback=initMap"></script>
+  </body>
+</html>
